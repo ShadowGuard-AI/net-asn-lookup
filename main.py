@@ -28,6 +28,10 @@ def resolve_hostname(hostname):
     Returns:
         str: The IP address if resolution is successful, None otherwise.
     """
+    # gethostbyname returns a single IPv4 address, the first one the
+    # resolver hands back. For a name with several addresses I only ever
+    # look up that one, which is fine here because the ASN is a property
+    # of the network, not of which address happened to come first.
     try:
         ip_address = socket.gethostbyname(hostname)
         logging.info(f"Hostname {hostname} resolved to {ip_address}")
@@ -51,12 +55,19 @@ def lookup_asn_info(ip_address):
         response = requests.get(url, timeout=5)
         response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
         
+        # The service signals a miss in the body text, not the status
+        # code, so I have to look for that sentence before I try to parse
+        # anything. A 200 with that text and a real answer look identical
+        # until this check runs.
         if "No ASN records found" in response.text:
             logging.warning(f"No ASN records found for {ip_address}")
             return None
 
         # Basic parsing of the response.  Ideally, a JSON API should be used for structured data.
         # This approach is brittle and depends on the exact format of the API response.
+        # Only the first two lines carry what I print. Anything the
+        # service adds after the description line is dropped here, and
+        # the ASN field is the text before the first pipe on line one.
         asn_info = {}
         lines = response.text.strip().split("\n")
         if len(lines) > 0:
@@ -73,6 +84,10 @@ def lookup_asn_info(ip_address):
         logging.error(f"An unexpected error occurred: {e}")
         return None
 
+# I check IPv4 only here, on purpose for this tool. An IPv6 address fails
+# this test and falls through to the hostname path in main, where
+# gethostbyname will not resolve it either, so IPv6 targets end at the
+# exit 1 error below rather than getting a lookup.
 def validate_ip_address(ip_address):
     """
     Validates if a given string is a valid IPv4 address.
@@ -114,6 +129,9 @@ def main():
 
     asn_info = lookup_asn_info(ip_address)
 
+    # A failed lookup is not an error exit here. Bad input exits 1 above
+    # because I never got an address to ask about, but a service that
+    # answers with nothing still counts as a completed run.
     if asn_info:
         print("ASN Information:")
         print(f"  ASN: {asn_info.get('asn', 'N/A')}")
